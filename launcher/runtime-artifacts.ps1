@@ -386,7 +386,7 @@ function Invoke-Bootstrap {
                 Install-MultiArtifactComponent -Component $component -ArtifactArchives $artifactArchives -TargetPath $target -WorkRoot $workRoot
             } else {
                 $archivePath = Get-VerifiedArchive -Component $component -CacheRoot $cacheRoot
-                Install-ComponentArchive -Component $component -ArchivePath $archivePath -TargetPath $target -WorkRoot $workRoot
+                Install-ComponentArchive -Component $component -ArchivePath $archivePath -TargetPath $target
             }
         } catch {
             $message = $_.Exception.Message

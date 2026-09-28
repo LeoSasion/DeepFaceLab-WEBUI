@@ -44,7 +44,10 @@ namespace DeepFaceLabSN.Launcher
         public RuntimeComponentValidation Get(string id)
         {
             RuntimeComponentValidation component;
-            return components.TryGetValue(id, out component) ? component : new RuntimeComponentValidation(id, id, null, true, false, "运行时清单未定义此组件。", null);
+            if (components.TryGetValue(id, out component)) return component;
+            string reason = !Loaded && !String.IsNullOrWhiteSpace(Error)
+                ? Error : "运行时清单未定义组件：" + id + "。";
+            return new RuntimeComponentValidation(id, id, null, true, false, reason, null);
         }
 
         public bool RequiredComponentsReady
@@ -75,8 +78,8 @@ namespace DeepFaceLabSN.Launcher
             Dictionary<string, RuntimeComponentValidation> results = new Dictionary<string, RuntimeComponentValidation>(StringComparer.OrdinalIgnoreCase);
             try
             {
-                if (String.IsNullOrWhiteSpace(projectRoot) || !Directory.Exists(projectRoot))
-                    return new RuntimeManifestValidation(false, "项目目录不存在，尚不能校验运行时。", results);
+                if (String.IsNullOrWhiteSpace(projectRoot))
+                    return new RuntimeManifestValidation(false, "尚未选择项目安装目录。", results);
                 if (String.IsNullOrWhiteSpace(manifestPath) || !File.Exists(manifestPath))
                     return new RuntimeManifestValidation(false, "未找到 launcher/runtime-manifest.json。", results);
 

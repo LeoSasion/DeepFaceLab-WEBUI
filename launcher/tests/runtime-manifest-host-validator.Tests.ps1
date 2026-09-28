@@ -83,5 +83,33 @@ Describe "native host runtime manifest validation" {
         $validation.Loaded | Should Be $false
         $validation.Error | Should Match "cudnn"
         $validation.RequiredComponentsReady | Should Be $false
+        $validation.Get("cudnn").Reason | Should Be $validation.Error
+    }
+
+    It "shows missing runtime files before the first install creates the target directory" {
+        $fixture = New-HostValidationFixture -PythonOutput "3.7.1"
+        $missingRoot = Join-Path $TestDrive "not-created-yet\.launcher-install\runtime"
+        $validation = Invoke-HostManifestValidation -ProjectRoot $missingRoot -ManifestPath $fixture.Manifest
+
+        $validation.Loaded | Should Be $true
+        $validation.Get("node").DisplayName | Should Be "Node"
+        $validation.Get("node").Reason | Should Match "node.exe"
+        $validation.Get("node").TargetPath | Should Be (Join-Path $missingRoot "_internal\node")
+        $validation.RequiredComponentsReady | Should Be $false
+        $missingRoot | Should Not Exist
+    }
+
+    It "preserves the actual manifest loading error in every missing component status" {
+        $fixture = New-HostValidationFixture -PythonOutput "3.7.1"
+        foreach ($manifestPath in @((Join-Path $TestDrive "missing-manifest.json"), $fixture.Manifest)) {
+            if ($manifestPath -eq $fixture.Manifest) {
+                [IO.File]::WriteAllText($manifestPath, '{invalid json')
+            }
+            $validation = Invoke-HostManifestValidation -ProjectRoot $fixture.Root -ManifestPath $manifestPath
+            $validation.Loaded | Should Be $false
+            $validation.Get("node").Reason | Should Be $validation.Error
+            $validation.Get("python").Reason | Should Be $validation.Error
+            $validation.RequiredComponentsReady | Should Be $false
+        }
     }
 }
