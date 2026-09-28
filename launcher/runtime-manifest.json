@@ -1,7 +1,7 @@
 {
   "$schema": "./runtime-manifest.schema.json",
   "schemaVersion": 2,
-  "manifestVersion": "2026.08.20.4",
+  "manifestVersion": "2026.09.29.1",
   "description": "Pinned project-local runtimes. CUDA and cuDNN are assembled from official redistributable archives; Python is built offline from the official CPython base and a SHA-256-pinned wheelhouse.",
   "components": [
     {

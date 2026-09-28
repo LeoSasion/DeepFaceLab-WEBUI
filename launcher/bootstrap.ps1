@@ -758,12 +758,23 @@ function Get-VerifiedArchive {
     throw "Every download source failed for $($Component.id): $($failures -join ' | ')"
 }
 
+function ConvertTo-ExtendedWindowsPath {
+    param([Parameter(Mandatory = $true)][string]$FullPath)
+
+    # Call only after canonicalizing and validating the path. Explicit extended
+    # paths work without enabling the machine-wide Windows long-path policy.
+    if ($FullPath.StartsWith('\\?\')) { return $FullPath }
+    if ($FullPath.StartsWith('\\')) { return '\\?\UNC\' + $FullPath.Substring(2) }
+    return '\\?\' + $FullPath
+}
+
 function Expand-ZipSafely {
     param(
         [Parameter(Mandatory = $true)][string]$ArchivePath,
         [Parameter(Mandatory = $true)][string]$Destination,
         [Parameter(Mandatory = $true)][string]$Id,
-        [string[]]$SelectedEntries
+        [string[]]$SelectedEntries,
+        [string]$ArchiveRoot = "."
     )
 
     Add-Type -AssemblyName System.IO.Compression | Out-Null
@@ -771,6 +782,12 @@ function Expand-ZipSafely {
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     $destinationFull = [IO.Path]::GetFullPath($Destination).TrimEnd('\', '/')
     $destinationPrefix = $destinationFull + [IO.Path]::DirectorySeparatorChar
+    $archivePrefix = $null
+    $foundArchiveRoot = $ArchiveRoot -eq "."
+    if (-not $foundArchiveRoot) {
+        [void](Resolve-SafeChildPath -BasePath $destinationFull -RelativePath $ArchiveRoot)
+        $archivePrefix = $ArchiveRoot.Replace('\', '/').TrimEnd('/') + '/'
+    }
     $selectedSet = $null
     $foundSelected = $null
     if ($PSBoundParameters.ContainsKey('SelectedEntries')) {
@@ -809,26 +826,38 @@ function Expand-ZipSafely {
 
             $normalizedEntry = $entryName.Replace('\', '/').TrimEnd('/')
             $isDirectory = [string]::IsNullOrEmpty($entry.Name)
+            $relativeEntry = $normalizedEntry
+            $inArchiveRoot = $true
+            if ($null -ne $archivePrefix) {
+                $inArchiveRoot = $normalizedEntry.StartsWith($archivePrefix, [StringComparison]::OrdinalIgnoreCase)
+                if ($inArchiveRoot) {
+                    $foundArchiveRoot = $true
+                    $relativeEntry = $normalizedEntry.Substring($archivePrefix.Length)
+                } elseif ($isDirectory -and [string]::Equals($normalizedEntry, $archivePrefix.TrimEnd('/'), [StringComparison]::OrdinalIgnoreCase)) {
+                    $foundArchiveRoot = $true
+                }
+            }
             $shouldExtract = $null -eq $selectedSet -or (-not $isDirectory -and $selectedSet.Contains($normalizedEntry))
-            if ($shouldExtract) {
-                $relativeWindows = $normalizedEntry.Replace('/', [IO.Path]::DirectorySeparatorChar)
+            if ($shouldExtract -and $inArchiveRoot) {
+                $relativeWindows = $relativeEntry.Replace('/', [IO.Path]::DirectorySeparatorChar)
                 $targetPath = [IO.Path]::GetFullPath((Join-Path $destinationFull $relativeWindows))
                 if (-not $targetPath.StartsWith($destinationPrefix, [StringComparison]::OrdinalIgnoreCase)) {
                     throw "ZIP entry escapes the staging directory: $entryName"
                 }
+                $nativeTarget = ConvertTo-ExtendedWindowsPath -FullPath $targetPath
                 if ($isDirectory) {
-                    New-Item -ItemType Directory -Path $targetPath -Force | Out-Null
+                    [IO.Directory]::CreateDirectory($nativeTarget) | Out-Null
                 } else {
                     if ($null -ne $foundSelected -and -not $foundSelected.Add($normalizedEntry)) {
                         throw "Selected ZIP entry occurs more than once: $entryName"
                     }
                     $parent = Split-Path -Parent $targetPath
-                    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+                    [IO.Directory]::CreateDirectory((ConvertTo-ExtendedWindowsPath -FullPath $parent)) | Out-Null
                     $entryStream = $null
                     $fileStream = $null
                     try {
                         $entryStream = $entry.Open()
-                        $fileStream = New-Object IO.FileStream($targetPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+                        $fileStream = New-Object IO.FileStream($nativeTarget, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
                         $entryStream.CopyTo($fileStream)
                     } finally {
                         if ($null -ne $fileStream) { $fileStream.Dispose() }
@@ -846,6 +875,9 @@ function Expand-ZipSafely {
                 }
                 Write-JsonEvent -Stage "runtime" -Id $Id -Status "extracting" -Progress $progress -Message $message
             }
+        }
+        if (-not $foundArchiveRoot) {
+            throw "Verified archive does not contain the expected root: $ArchiveRoot"
         }
         if ($null -ne $selectedSet -and $foundSelected.Count -ne $selectedSet.Count) {
             $missing = @($selectedSet | Where-Object { -not $foundSelected.Contains($_) })
@@ -883,13 +915,11 @@ function Install-ComponentArchive {
     param(
         [Parameter(Mandatory = $true)][object]$Component,
         [Parameter(Mandatory = $true)][string]$ArchivePath,
-        [Parameter(Mandatory = $true)][string]$TargetPath,
-        [Parameter(Mandatory = $true)][string]$WorkRoot
+        [Parameter(Mandatory = $true)][string]$TargetPath
     )
 
     $id = [string]$Component.id
     $token = "$PID-" + [Guid]::NewGuid().ToString("N")
-    $extractRoot = Resolve-SafeChildPath -BasePath $WorkRoot -RelativePath ("extract-$id-$token")
     $targetParent = Split-Path -Parent $TargetPath
     New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
     $stagingPath = $TargetPath + ".installing-" + $token
@@ -898,19 +928,6 @@ function Install-ComponentArchive {
     $newTargetMoved = $false
 
     try {
-        Write-JsonEvent -Stage "runtime" -Id $id -Status "extracting" -Progress 10 -Message "正在解压到同磁盘临时目录并检查 ZIP 路径…"
-        Expand-ZipSafely -ArchivePath $ArchivePath -Destination $extractRoot -Id $id
-
-        $archiveRootRule = [string]$Component.install.archiveRoot
-        $sourceRoot = if ($archiveRootRule -eq ".") {
-            $extractRoot
-        } else {
-            Resolve-SafeChildPath -BasePath $extractRoot -RelativePath $archiveRootRule
-        }
-        if (-not (Test-Path -LiteralPath $sourceRoot -PathType Container)) {
-            throw "Verified archive does not contain the expected root: $archiveRootRule"
-        }
-
         New-Item -ItemType Directory -Path $stagingPath | Out-Null
         $payloadTarget = if ([string]$Component.install.layout -eq "bin") {
             Join-Path $stagingPath "bin"
@@ -918,7 +935,11 @@ function Install-ComponentArchive {
             $stagingPath
         }
         New-Item -ItemType Directory -Path $payloadTarget -Force | Out-Null
-        Get-ChildItem -LiteralPath $sourceRoot -Force | Copy-Item -Destination $payloadTarget -Recurse -Force
+        # Extract straight into the atomic replacement directory. Keeping the
+        # archive's outer folder in a second deep work tree can push npm files
+        # beyond MAX_PATH even when the final installation path is short.
+        Write-JsonEvent -Stage "runtime" -Id $id -Status "extracting" -Progress 10 -Message "正在解压到同磁盘临时目录并检查 ZIP 路径…"
+        Expand-ZipSafely -ArchivePath $ArchivePath -Destination $payloadTarget -Id $id -ArchiveRoot ([string]$Component.install.archiveRoot)
         Get-ChildItem -LiteralPath $stagingPath -File -Recurse -Force | Unblock-File -ErrorAction SilentlyContinue
 
         $stagingValidation = Get-ValidationResult -Component $Component -TargetPath $stagingPath
@@ -965,7 +986,6 @@ function Install-ComponentArchive {
         throw $originalError
     } finally {
         Remove-SafeDirectory -Path $stagingPath -AllowedRoot $targetParent -IgnoreErrors
-        Remove-SafeDirectory -Path $extractRoot -AllowedRoot $WorkRoot -IgnoreErrors
     }
 }
 
@@ -1105,7 +1125,7 @@ function Invoke-Bootstrap {
             Write-JsonEvent -Stage "runtime" -Id $id -Status "repairing" -Progress 1 -Message "检测到缺失或损坏（$($validation.Reason)），准备安全安装。"
             Assert-FreeSpace -Path (Split-Path -Parent $target) -RequiredBytes ([Int64]$component.install.requiredFreeBytes) -Id $id
             $archive = Get-VerifiedArchive -Component $component -CacheRoot $cacheRoot
-            Install-ComponentArchive -Component $component -ArchivePath $archive -TargetPath $target -WorkRoot $workRoot
+            Install-ComponentArchive -Component $component -ArchivePath $archive -TargetPath $target
         } catch {
             $message = $_.Exception.Message
             Write-JsonEvent -Stage "runtime" -Id $id -Status "failed" -Progress 0 -Message "$($component.displayName) 安装失败：$message"
