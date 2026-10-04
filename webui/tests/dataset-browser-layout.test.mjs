@@ -94,7 +94,7 @@ test("dataset browser keeps a height-derived inspector, fluid thumbnails, real o
   assert.match(styles, /\.annotation-canvas\s*\{[\s\S]*?width:\s*min\(100cqw, 100cqh\);[\s\S]*?height:\s*min\(100cqw, 100cqh\);[\s\S]*?aspect-ratio:\s*1;/);
 });
 
-test("dataset actions preserve sample context and planned image tools stay non-operative", async () => {
+test("dataset actions preserve sample context when opening image tools", async () => {
   const [operationsSource, appSource, toolLabSource] = await Promise.all([
     readFile(new URL("../src/components/OperationsView.jsx", import.meta.url), "utf8"),
     readFile(new URL("../src/App.jsx", import.meta.url), "utf8"),
@@ -104,10 +104,6 @@ test("dataset actions preserve sample context and planned image tools stay non-o
     operationsSource.indexOf("function AssetInspector"),
     operationsSource.indexOf("export function DatasetView"),
   );
-  const imageToolsSource = toolLabSource.slice(
-    toolLabSource.indexOf("const IMAGE_TOOL_MODES"),
-    toolLabSource.indexOf("export function ToolLabView"),
-  );
 
   assert.match(assetInspectorSource, /disabled=\{isQuarantined \|\| !onOpenXSeg\}/);
   assert.match(appSource, /setXsegFocus\(\{ side, sample, nonce: Date\.now\(\) \}\)/);
@@ -115,16 +111,9 @@ test("dataset actions preserve sample context and planned image tools stay non-o
   assert.match(appSource, /focusItem=\{xsegFocus\?\.side === xsegSide \? xsegFocus\.sample : null\}/);
   assert.match(appSource, /toolFocus=\{toolFocus\}/);
 
-  assert.match(imageToolsSource, /function ImageToolsPlaceholder\(/);
-  assert.match(imageToolsSource, /id: "clarity"/);
-  assert.match(imageToolsSource, /id: "single-frame"/);
-  assert.match(imageToolsSource, /id: "ai-edit"/);
-  assert.match(imageToolsSource, /className="image-tools-status">\{t\("规划中"\)\}/);
-  assert.match(imageToolsSource, /className="button primary image-tools-submit" disabled/);
-  assert.match(imageToolsSource, /当前不会上传、生成或修改任何文件。/);
-  assert.match(imageToolsSource, /上传前必须明确确认图像服务商和本次素材范围。/);
-  assert.doesNotMatch(imageToolsSource, /faces_enhance/);
-  assert.doesNotMatch(imageToolsSource, /\b(?:fetch|axios)\s*\(|runtimeApi\./);
+  assert.match(toolLabSource, /toolFocus=\{toolFocus\}/);
+  // The previously planned tool is now operational. Provider consent and
+  // submission behavior are covered by isolated image-service manager tests.
 });
 
 test("XSeg unsaved annotations guard refresh, app navigation, and page unload", async () => {

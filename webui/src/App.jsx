@@ -369,6 +369,7 @@ export function App() {
 
   useEffect(() => {
     navigationTouchedRef.current = false;
+    setToolFocus(null);
   }, [runtime.health?.runtime?.current?.workspace]);
 
   const confirmDiscardXSeg = useCallback(() => {
@@ -764,6 +765,7 @@ export function App() {
   } else if (activeNav === "tools") {
     mainContent = (
       <ToolLabView
+        workspaceKey={workspacePath}
         commands={commands}
         onOpenCommand={openCommand}
         onError={showError}

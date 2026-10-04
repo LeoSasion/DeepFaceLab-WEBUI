@@ -1,6 +1,6 @@
 # DeepFaceLab-WEBUI
 
-DeepFaceLab-WEBUI 是一套面向 Windows 与 NVIDIA GPU 的本地 DeepFaceLab 工作台。它把素材整理、提帧、切脸、质量检查、XSeg、训练、模型诊断、合成和视频导出放进同一条可视化流程；命令仍在本机运行，素材不会因为使用 WebUI 而上传到云端。
+DeepFaceLab-WEBUI 是一套面向 Windows 与 NVIDIA GPU 的本地 DeepFaceLab 工作台。它把素材整理、提帧、切脸、质量检查、XSeg、训练、模型诊断、合成和视频导出放进同一条可视化流程；DFL 命令仍在本机运行。可选的奇智图像服务仅在确认平台与本次素材范围后上传所选图片；本地 DFL 流程无需该服务。
 
 > 请只处理你拥有或已获授权的素材，并遵守适用的隐私、肖像权和内容标识规定。
 
@@ -134,7 +134,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File launcher\build-host.ps1
 
 先完成 SRC，再完成 DST。切脸后可在“SRC 数据”与“DST 数据”逐张管理 aligned 人脸：左侧缩略图列表会随可用宽度增加列数，右上角 `− / +` 可调整每行数量；右侧保持固定宽度的 1:1 大图预览，并可叠加 DFL 定位、手绘多边形、标注点和应用遮罩图层。
 
-“隔离”和“恢复区”位于数据集命令栏右侧。恢复区与工作区采用相同的“缩略图列表 + 大图属性”结构，可先隔离问题样本再复核恢复。大图下方还提供 XSeg 编辑入口，以及处于“规划中”的清晰增强、单图合成和 AI 图像编辑入口。
+“隔离”和“恢复区”位于数据集命令栏右侧。恢复区与工作区采用相同的“缩略图列表 + 大图属性”结构，可先隔离问题样本再复核恢复。大图下方还提供 XSeg 编辑、清晰增强、参考图合成和 AI 图像编辑入口。图像工具使用可选的奇智 API，先在本机暂存素材，确认范围后才提交；参考图合成不调用本地 DFL 模型。
 
 ![人脸数据检查](docs/images/product-dataset.png)
 
@@ -199,7 +199,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File launcher\build-host.ps1
 - 元数据与打包：检查 DFL 图片元数据和 PackedFaceset。
 - 模型导出：DFM 导出前检查模型、空间和依赖条件。
 - 姿态图谱与覆盖清单：定位 SRC / DST 中缺少的角度与表情。
-- 图像工具：清晰增强、单图合成和 Gemini / GPT Image 临时编辑的界面入口；当前明确标记为“规划中”，不会伪装成已完成能力。
+- 图像工具：奇智 API 文生图、清晰增强、参考图合成与提示词编辑；包含申请 API、本机加密 Key、素材确认、任务恢复、项目内结果保存和最终实扣。使用与范围见 [图像服务说明](docs/IMAGE_SERVICE.md)。
 - 命令目录：查看 WebUI 允许执行的固定命令及其用途。
 
 需要 DFL GPU 实时交互的 Manual Extractor 与 Interactive Merger，会先进入可视化预检，再接力到固定 Python 命令。WebUI 不开放任意 Shell。

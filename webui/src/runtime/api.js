@@ -281,6 +281,27 @@ async function uploadVideo(side, file, { replace = false, onProgress } = {}) {
 }
 
 export const runtimeApi = {
+  imageServiceSettings: (options = {}) => request("/api/image-service/settings", options),
+  saveImageServiceSettings: (data, options = {}) => request("/api/image-service/settings", {
+    ...options, method: "PUT", body: JSON.stringify(data),
+  }),
+  stageImageInput: (file, options = {}) => request(`/api/image-service/inputs?name=${encodeURIComponent(file.name)}`, {
+    ...options, method: "POST", body: file, headers: { "Content-Type": "application/octet-stream", ...options.headers },
+  }),
+  stageAlignedImageInput: (side, name, options = {}) => request("/api/image-service/inputs/aligned", {
+    ...options, method: "POST", body: JSON.stringify({ side, name }),
+  }),
+  imageServiceTasks: (options = {}) => request("/api/image-service/tasks", options),
+  imageServiceTask: (id, options = {}) => request(`/api/image-service/tasks/${encodeURIComponent(id)}`, options),
+  createImageServiceTask: (body, options = {}) => request("/api/image-service/tasks", {
+    ...options, method: "POST", body: JSON.stringify(body),
+  }),
+  checkImageServiceTask: (id, options = {}) => request(`/api/image-service/tasks/${encodeURIComponent(id)}/check`, {
+    ...options, method: "POST",
+  }),
+  imageInputUrl: id => `/api/image-service/inputs/${encodeURIComponent(id)}`,
+  imageResultUrl: (id, index, { download = false } = {}) => `/api/image-service/tasks/${encodeURIComponent(id)}/results/${index}${download ? "?download=1" : ""}`,
+
   health: () => request("/api/health"),
   telemetry: () => request("/api/telemetry"),
   commands: () => request("/api/commands"),

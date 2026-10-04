@@ -16,7 +16,7 @@ import { taskTypes } from "../data/dashboard.js";
 import { useI18n } from "../i18n.jsx";
 import { LoadingProgress } from "./ProgressFeedback.jsx";
 
-function useDialogFocus(open, onClose) {
+export function useDialogFocus(open, onClose) {
   const dialogRef = useRef(null);
   const initialFocusRef = useRef(null);
 

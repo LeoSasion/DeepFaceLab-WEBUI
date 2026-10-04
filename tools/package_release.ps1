@@ -173,6 +173,8 @@ if ($LASTEXITCODE -ne 0) {
 $excludeMasks = @(
     "$PackageRootName\.git",
     "$PackageRootName\.git\*",
+    "$PackageRootName\.validation",
+    "$PackageRootName\.validation\*",
     "$PackageRootName\.release-webui-hoisted",
     "$PackageRootName\.release-webui-hoisted\*",
     "$PackageRootName\.impeccable\*",

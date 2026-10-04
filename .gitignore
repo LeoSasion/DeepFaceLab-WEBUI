@@ -17,6 +17,7 @@ _internal/config.txt
 *.npy
 
 # Local runtime and editor noise
+/.validation/
 **/__pycache__/
 *.py[cod]
 **/.vs/

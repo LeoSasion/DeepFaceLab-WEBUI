@@ -32,6 +32,7 @@ import { describeEnvironment } from "./environment.mjs";
 import { DisabledExternalWindowAdapter } from "./external-window-adapter.mjs";
 import { JobManager } from "./job-manager.mjs";
 import { OperationManager } from "./operation-manager.mjs";
+import { ImageServiceManager } from "./image-service-manager.mjs";
 import { PATHS, pathExists } from "./paths.mjs";
 import { ProjectManager } from "./project-manager.mjs";
 import { buildDiagnosticSnapshot, inspectStorage } from "./system-diagnostics.mjs";
@@ -58,6 +59,39 @@ import {
 } from "./video-tool-manager.mjs";
 
 const MAX_BODY_BYTES = 256 * 1024;
+const MAX_IMAGE_INPUT_BYTES = 50 * 1024 * 1024;
+
+async function readImageInput(request) {
+  const length = Number(request.headers["content-length"]);
+  if (Number.isFinite(length) && length > MAX_IMAGE_INPUT_BYTES) {
+    throw apiError("单张图片不能超过 50 MB", "IMAGE_INPUT_TOO_LARGE", 413);
+  }
+  const chunks = [];
+  let bytes = 0;
+  for await (const chunk of request) {
+    bytes += chunk.length;
+    if (bytes > MAX_IMAGE_INPUT_BYTES) {
+      throw apiError("单张图片不能超过 50 MB", "IMAGE_INPUT_TOO_LARGE", 413);
+    }
+    chunks.push(chunk);
+  }
+  if (request.aborted) throw apiError("本地图片暂存已中断", "IMAGE_INPUT_ABORTED", 400);
+  return Buffer.concat(chunks, bytes);
+}
+
+async function sendImageServiceFile(response, file, { download = false } = {}) {
+  const info = await stat(file.path);
+  response.writeHead(200, {
+    "Content-Type": file.mimeType,
+    "Content-Length": info.size,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    ...(download ? {
+      "Content-Disposition": `attachment; filename="image${path.extname(file.name)}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+    } : {}),
+  });
+  createReadStream(file.path).on("error", () => response.destroy()).pipe(response);
+}
 export const LARGE_UPLOAD_REQUEST_TIMEOUT_MS = 12 * 60 * 60 * 1000;
 export const PROJECT_RESTART_RETRY_MS = 2_000;
 export const SUPPORTED_OPERATION_KINDS = Object.freeze([
@@ -278,6 +312,7 @@ export class RuntimeServer {
     trainingEvaluationManager = new TrainingEvaluationManager(),
     jobManager = null,
     operationManager = new OperationManager(),
+    imageServiceManager = new ImageServiceManager(),
     externalWindowAdapter = new DisabledExternalWindowAdapter(),
     projectManager = new ProjectManager(),
     commandPreparer = prepareCommand,
@@ -291,6 +326,8 @@ export class RuntimeServer {
     this.trainingEvaluationManager = trainingEvaluationManager;
     this.jobManager = jobManager ?? new JobManager({ trainingEvaluationManager });
     this.operationManager = operationManager;
+    this.imageServiceManager = imageServiceManager;
+    this.imageServiceInitializationError = null;
     this.externalWindowAdapter = externalWindowAdapter;
     this.projectManager = projectManager;
     this.commandPreparer = commandPreparer;
@@ -317,6 +354,11 @@ export class RuntimeServer {
       this.jobManager.initialize(),
       this.operationManager.initialize(),
       this.trainingEvaluationManager.initialize(),
+      Promise.resolve().then(() => this.imageServiceManager.initialize()).catch(error => {
+        // An unreadable optional image-service record must not disable DFL.
+        // Preserve the file and report an unknown state on this feature's API.
+        this.imageServiceInitializationError = error;
+      }),
     ]);
     this.webSocketServer = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
     this.httpServer = createServer((request, response) => {
@@ -356,7 +398,10 @@ export class RuntimeServer {
   }
 
   activeOperations() {
-    return this.operationManager.list().filter((operation) => ACTIVE_OPERATION_STATES.has(operation?.status));
+    return [
+      ...this.operationManager.list().filter((operation) => ACTIVE_OPERATION_STATES.has(operation?.status)),
+      ...(this.imageServiceManager.activeTasks?.() ?? []),
+    ];
   }
 
   scheduleProjectRestart(result) {
@@ -429,6 +474,7 @@ export class RuntimeServer {
       this.projectRestartBusyWarningIssued = false;
     }
     await this.jobManager.flushAll?.();
+    await this.imageServiceManager.close?.();
     for (const client of this.webSocketServer?.clients ?? []) client.close(1001, "服务停止");
     await new Promise((resolve) => {
       if (!this.httpServer?.listening) return resolve();
@@ -656,6 +702,9 @@ export class RuntimeServer {
   }
 
   async handleApi(request, response, url) {
+    if (url.pathname.startsWith("/api/image-service/") && this.imageServiceInitializationError) {
+      throw this.imageServiceInitializationError;
+    }
     if (request.method === "GET" && url.pathname === "/api/health") {
       const [pythonAvailable, currentAvailable, legacyAvailable, workspaceAvailable] =
         await Promise.all([
@@ -699,6 +748,55 @@ export class RuntimeServer {
 
     if (request.method === "GET" && url.pathname === "/api/commands") {
       return sendJson(response, 200, { ok: true, data: listCommands() });
+    }
+    if (request.method === "GET" && url.pathname === "/api/image-service/settings") {
+      return sendJson(response, 200, { ok: true, data: await this.imageServiceManager.settings() });
+    }
+    if (request.method === "PUT" && url.pathname === "/api/image-service/settings") {
+      this.assertNoWorkspaceMutation();
+      return sendJson(response, 200, { ok: true, data: await this.imageServiceManager.saveSettings(await readJsonBody(request)) });
+    }
+    if (request.method === "POST" && url.pathname === "/api/image-service/inputs") {
+      this.assertNoWorkspaceMutation();
+      return sendJson(response, 201, { ok: true, data: await this.withWorkspaceMutation("暂存图像素材", async () => (
+        this.imageServiceManager.stageInput({ name: url.searchParams.get("name"), bytes: await readImageInput(request) })
+      ), { allowActiveJobs: true }) });
+    }
+    if (request.method === "POST" && url.pathname === "/api/image-service/inputs/aligned") {
+      const body = await readJsonBody(request);
+      return sendJson(response, 201, { ok: true, data: await this.withWorkspaceMutation("暂存已选 aligned 图片", () => (
+        this.imageServiceManager.stageAligned({ side: body.side, name: body.name })
+      ), { allowActiveJobs: true }) });
+    }
+    if (request.method === "GET" && url.pathname === "/api/image-service/tasks") {
+      return sendJson(response, 200, { ok: true, data: await this.imageServiceManager.listTasks() });
+    }
+    if (request.method === "POST" && url.pathname === "/api/image-service/tasks") {
+      const body = await readJsonBody(request);
+      return sendJson(response, 202, { ok: true, data: await this.withWorkspaceMutation("提交图像生成任务", () => (
+        this.imageServiceManager.createTask(body)
+      ), { allowActiveJobs: true }) });
+    }
+    const imageTaskCheck = url.pathname.match(/^\/api\/image-service\/tasks\/([a-z0-9_-]{1,128})\/check$/i);
+    if (request.method === "POST" && imageTaskCheck) {
+      this.assertNoWorkspaceMutation();
+      return sendJson(response, 200, { ok: true, data: await this.imageServiceManager.checkTask(imageTaskCheck[1]) });
+    }
+    const imageTaskResult = url.pathname.match(/^\/api\/image-service\/tasks\/([a-z0-9_-]{1,128})\/results\/(\d{1,2})$/i);
+    if (request.method === "GET" && imageTaskResult) {
+      return sendImageServiceFile(response, await this.imageServiceManager.resultFile(imageTaskResult[1], Number(imageTaskResult[2])), {
+        download: url.searchParams.get("download") === "1",
+      });
+    }
+    const imageTask = url.pathname.match(/^\/api\/image-service\/tasks\/([a-z0-9_-]{1,128})$/i);
+    if (request.method === "GET" && imageTask) {
+      const task = await this.imageServiceManager.getTask(imageTask[1]);
+      if (!task) throw apiError("图像任务不存在", "IMAGE_TASK_NOT_FOUND", 404);
+      return sendJson(response, 200, { ok: true, data: task });
+    }
+    const imageInput = url.pathname.match(/^\/api\/image-service\/inputs\/([a-z0-9_-]{1,128})$/i);
+    if (request.method === "GET" && imageInput) {
+      return sendImageServiceFile(response, await this.imageServiceManager.inputFile(imageInput[1]));
     }
     if (request.method === "GET" && url.pathname === "/api/telemetry") {
       return sendJson(response, 200, { ok: true, data: await getGpuTelemetry() });
@@ -748,6 +846,10 @@ export class RuntimeServer {
     }
     const projectActivateMatch = url.pathname.match(/^\/api\/projects\/([a-z0-9][a-z0-9-]{0,47})\/activate$/);
     if (request.method === "POST" && projectActivateMatch) {
+      const imageTasks = this.imageServiceManager.activeTasks?.() ?? [];
+      if (imageTasks.length) throw runtimeConflict("图像任务正在上传、生成或保存，请等待任务暂停或结束后切换项目", "PROJECT_IMAGE_TASK_BUSY", {
+        taskIds: imageTasks.map(task => task.id),
+      });
       const result = await this.withWorkspaceMutation("切换项目", () => (
         this.projectManager.activate(projectActivateMatch[1], this.jobManager.list())
       ));

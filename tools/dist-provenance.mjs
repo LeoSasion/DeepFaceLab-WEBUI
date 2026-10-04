@@ -17,6 +17,7 @@ const inputs = [
   path.join(webuiRoot, "worker", "index.js"),
   path.join(webuiRoot, "scripts", "prepare-sites-build.mjs"),
   path.join(webuiRoot, "src"),
+  path.join(webuiRoot, "shared"),
   path.join(webuiRoot, "public"),
   path.join(repositoryRoot, "release", "version.json"),
   path.join(repositoryRoot, "release", "version.mjs"),

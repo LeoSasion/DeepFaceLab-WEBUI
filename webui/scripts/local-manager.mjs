@@ -134,6 +134,7 @@ function printStatus(status) {
 function newestSourceMtime() {
   const roots = [
     path.join(webuiRoot, "src"),
+    path.join(webuiRoot, "shared"),
     path.join(webuiRoot, "public"),
   ];
   const files = [

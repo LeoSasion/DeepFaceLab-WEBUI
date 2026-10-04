@@ -853,7 +853,7 @@ function AssetInspector({
           disabled={!onOpenTool}
           onClick={() => onOpenTool?.("single-frame", side, item)}
         >
-          <IconPlayerPlay size={15} />{t("单图合成")}
+          <IconPlayerPlay size={15} />{t("参考图合成")}
         </button>
         <button
           className="button secondary"
